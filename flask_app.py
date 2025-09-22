@@ -1,261 +1,424 @@
-from flask import Flask, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
-from flask_bcrypt import Bcrypt
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+import pyodbc
 import os
 from datetime import timedelta
-from azure.identity import DefaultAzureCredential
-from azure.keyvault.secrets import SecretClient
-import pyodbc
-import urllib.parse
-import logging
-import ssl
+import bcrypt
+from dotenv import load_dotenv
 
-# Initialize Flask app
+# Load environment variables
+load_dotenv()
+
 app = Flask(__name__)
-CORS(app, supports_credentials=True)
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key-change-in-production')
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
+CORS(app)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Initialize extensions
-bcrypt = Bcrypt(app)
 jwt = JWTManager(app)
 
-# Azure Key Vault configuration (for production)
-KEY_VAULT_NAME = os.environ.get("KEY_VAULT_NAME", "pawfectfind-kv")
-KEY_VAULT_URI = f"https://{KEY_VAULT_NAME}.vault.azure.net/"
-
-def get_secret(secret_name):
-    """Get secret from Azure Key Vault or environment variables"""
-    if os.environ.get("FLASK_ENV") == "production" and KEY_VAULT_NAME != "pawfectfind-kv":
-        try:
-            credential = DefaultAzureCredential()
-            client = SecretClient(vault_url=KEY_VAULT_URI, credential=credential)
-            secret = client.get_secret(secret_name)
-            return secret.value
-        except Exception as e:
-            logger.error(f"Error fetching secret {secret_name}: {str(e)}")
-            return os.environ.get(secret_name)
-    else:
-        return os.environ.get(secret_name)
-
-# Configuration
-app.config["SECRET_KEY"] = get_secret("FLASK_SECRET_KEY") or "dev-secret-key-change-in-production"
-app.config["JWT_SECRET_KEY"] = get_secret("JWT_SECRET_KEY") or "jwt-secret-key-change-in-production"
-app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)
-
-# Azure SQL Database configuration
-def get_azure_sql_connection_string():
-    """Build Azure SQL connection string"""
-    server = os.environ.get('DB_SERVER', 'pawfectfinddb.database.windows.net')
-    database = os.environ.get('DB_NAME', 'pawfectfind')
-    username = os.environ.get('pawfectadmin')
-    password = os.environ.get('Password!123')
+# Azure SQL Database connection
+def get_db_connection():
+    # Use environment variable NAMES, not the actual values
+    server = os.getenv('AZURE_SQL_SERVER')  # This should be 'pawfectfinddb.database.windows.net' in your .env
+    database = os.getenv('AZURE_SQL_DATABASE')  # This should be 'pawfectfinddb' in your .env
+    username = os.getenv('AZURE_SQL_USERNAME')  # This should be 'pawfectadmin' in your .env
+    password = os.getenv('AZURE_SQL_PASSWORD')  # This should be 'Password!123' in your .env
+    driver = '{ODBC Driver 18 for SQL Server}'
     
-    if not all([server, database, username, password]):
-        logger.error("Missing database configuration")
-        return None
-    
-    # For Azure SQL
-    driver = '{ODBC Driver 17 for SQL Server}'
     connection_string = f"""
-        Driver={driver};
-        Server={server};
-        Database={database};
-        Uid={username};
-        Pwd={password};
+        DRIVER={driver};
+        SERVER={server};
+        DATABASE={database};
+        UID={username};
+        PWD={password};
         Encrypt=yes;
         TrustServerCertificate=no;
         Connection Timeout=30;
     """
     
-    return connection_string
+    return pyodbc.connect(connection_string)
 
-# Set SQLAlchemy database URI
-connection_string = get_azure_sql_connection_string()
-if connection_string:
-    params = urllib.parse.quote_plus(connection_string)
-    app.config['SQLALCHEMY_DATABASE_URI'] = f"mssql+pyodbc:///?odbc_connect={params}"
-else:
-    # Fallback for development (you can use SQLite for local dev)
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///pawfectfind.db'
+# Initialize database tables
+def init_db():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Create users table
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='users' AND xtype='U')
+            CREATE TABLE users (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                email NVARCHAR(255) UNIQUE NOT NULL,
+                password_hash NVARCHAR(255) NOT NULL,
+                full_name NVARCHAR(255) NOT NULL,
+                phone_number NVARCHAR(20),
+                created_at DATETIME2 DEFAULT GETDATE()
+            )
+        """)
+        
+        # Create pets table
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='pets' AND xtype='U')
+            CREATE TABLE pets (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                user_id INT FOREIGN KEY REFERENCES users(id),
+                name NVARCHAR(255) NOT NULL,
+                type NVARCHAR(100) NOT NULL,
+                breed NVARCHAR(255),
+                age INT,
+                created_at DATETIME2 DEFAULT GETDATE()
+            )
+        """)
+        
+        # Create bookings table
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='bookings' AND xtype='U')
+            CREATE TABLE bookings (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                user_id INT FOREIGN KEY REFERENCES users(id),
+                pet_id INT FOREIGN KEY REFERENCES pets(id),
+                service_type NVARCHAR(100) NOT NULL,
+                vendor_id NVARCHAR(100) NOT NULL,
+                booking_date DATE NOT NULL,
+                status NVARCHAR(50) DEFAULT 'pending',
+                created_at DATETIME2 DEFAULT GETDATE()
+            )
+        """)
+        
+        conn.commit()
+        print("Database tables initialized successfully")
+        
+    except Exception as e:
+        print(f"Error initializing database: {str(e)}")
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
-    "pool_recycle": 300,
-    "pool_pre_ping": True,
-}
-
-# Initialize database
-db = SQLAlchemy(app)
-
-# Models
-class User(db.Model):
-    __tablename__ = 'users'
-    id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(128), nullable=False)
-    first_name = db.Column(db.String(50), nullable=False)
-    last_name = db.Column(db.String(50), nullable=False)
-    phone = db.Column(db.String(20))
-    user_type = db.Column(db.String(20), nullable=False)  # 'customer' or 'vendor'
-    created_at = db.Column(db.DateTime, server_default=db.func.now())
-    
-    # Vendor-specific fields (nullable for customers)
-    business_name = db.Column(db.String(100))
-    business_address = db.Column(db.Text)
-    services_offered = db.Column(db.Text)  # JSON string of services
-    rating = db.Column(db.Float, default=0.0)
-    is_verified = db.Column(db.Boolean, default=False)
-
-    def set_password(self, password):
-        self.password_hash = bcrypt.generate_password_hash(password).decode('utf-8')
-
-    def check_password(self, password):
-        return bcrypt.check_password_hash(self.password_hash, password)
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'email': self.email,
-            'first_name': self.first_name,
-            'last_name': self.last_name,
-            'phone': self.phone,
-            'user_type': self.user_type,
-            'business_name': self.business_name,
-            'business_address': self.business_address,
-            'services_offered': self.services_offered,
-            'rating': self.rating,
-            'is_verified': self.is_verified,
-            'created_at': self.created_at.isoformat() if self.created_at else None
-        }
-
-# Routes
-@app.route('/')
-def home():
-    return jsonify({"message": "PawfectFind API Server", "status": "healthy"})
-
-@app.route('/api/register', methods=['POST'])
+# Auth Routes
+@app.route('/api/auth/register', methods=['POST'])
 def register():
     try:
         data = request.get_json()
+        email = data.get('email')
+        password = data.get('password')
+        full_name = data.get('full_name')
+        phone_number = data.get('phone_number')
         
-        # Validate required fields
-        required_fields = ['email', 'password', 'first_name', 'last_name', 'user_type']
-        for field in required_fields:
-            if field not in data:
-                return jsonify({"error": f"Missing required field: {field}"}), 400
+        if not email or not password or not full_name:
+            return jsonify({'error': 'Email, password, and full name are required'}), 400
+        
+        # Hash password
+        password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
         # Check if user already exists
-        if User.query.filter_by(email=data['email']).first():
-            return jsonify({"error": "User already exists"}), 409
+        cursor.execute("SELECT id FROM users WHERE email = ?", (email,))
+        if cursor.fetchone():
+            return jsonify({'error': 'User already exists'}), 409
         
-        # Create new user
-        new_user = User(
-            email=data['email'],
-            first_name=data['first_name'],
-            last_name=data['last_name'],
-            user_type=data['user_type'],
-            phone=data.get('phone')
-        )
+        # Insert new user
+        cursor.execute("""
+            INSERT INTO users (email, password_hash, full_name, phone_number)
+            OUTPUT INSERTED.id
+            VALUES (?, ?, ?, ?)
+        """, (email, password_hash, full_name, phone_number))
         
-        # Set vendor-specific fields if applicable
-        if data['user_type'] == 'vendor':
-            new_user.business_name = data.get('business_name')
-            new_user.business_address = data.get('business_address')
-            new_user.services_offered = data.get('services_offered')
+        user_id = cursor.fetchone()[0]
+        conn.commit()
         
-        new_user.set_password(data['password'])
-        
-        db.session.add(new_user)
-        db.session.commit()
-        
-        # Generate access token
-        access_token = create_access_token(identity=str(new_user.id))
+        # Create access token
+        access_token = create_access_token(identity=str(user_id))
         
         return jsonify({
-            "message": "User created successfully",
-            "user": new_user.to_dict(),
-            "access_token": access_token
+            'message': 'User registered successfully',
+            'access_token': access_token,
+            'user': {
+                'id': user_id,
+                'email': email,
+                'full_name': full_name
+            }
         }), 201
         
     except Exception as e:
-        db.session.rollback()
-        logger.error(f"Registration error: {str(e)}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
-@app.route('/api/login', methods=['POST'])
+@app.route('/api/auth/login', methods=['POST'])
 def login():
     try:
         data = request.get_json()
+        email = data.get('email')
+        password = data.get('password')
         
-        if not data or 'email' not in data or 'password' not in data:
-            return jsonify({"error": "Email and password required"}), 400
+        if not email or not password:
+            return jsonify({'error': 'Email and password are required'}), 400
         
-        user = User.query.filter_by(email=data['email']).first()
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
-        if not user or not user.check_password(data['password']):
-            return jsonify({"error": "Invalid credentials"}), 401
+        cursor.execute("""
+            SELECT id, email, password_hash, full_name FROM users WHERE email = ?
+        """, (email,))
         
-        # Generate access token
-        access_token = create_access_token(identity=str(user.id))
+        user = cursor.fetchone()
+        
+        if not user or not bcrypt.checkpw(password.encode('utf-8'), user[2].encode('utf-8')):
+            return jsonify({'error': 'Invalid credentials'}), 401
+        
+        access_token = create_access_token(identity=str(user[0]))
         
         return jsonify({
-            "message": "Login successful",
-            "user": user.to_dict(),
-            "access_token": access_token
-        }), 200
+            'message': 'Login successful',
+            'access_token': access_token,
+            'user': {
+                'id': user[0],
+                'email': user[1],
+                'full_name': user[3]
+            }
+        })
         
     except Exception as e:
-        logger.error(f"Login error: {str(e)}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
+# Protected Routes
 @app.route('/api/profile', methods=['GET'])
 @jwt_required()
 def get_profile():
     try:
         user_id = get_jwt_identity()
-        user = User.query.get(user_id)
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, email, full_name, phone_number, created_at 
+            FROM users WHERE id = ?
+        """, (user_id,))
+        
+        user = cursor.fetchone()
         
         if not user:
-            return jsonify({"error": "User not found"}), 404
+            return jsonify({'error': 'User not found'}), 404
         
-        return jsonify({"user": user.to_dict()}), 200
+        return jsonify({
+            'user': {
+                'id': user[0],
+                'email': user[1],
+                'full_name': user[2],
+                'phone_number': user[3],
+                'created_at': user[4]
+            }
+        })
         
     except Exception as e:
-        logger.error(f"Profile fetch error: {str(e)}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
-# Health check endpoint for Azure
-@app.route('/health')
-def health():
+@app.route('/api/pets', methods=['GET'])
+@jwt_required()
+def get_user_pets():
     try:
-        # Test database connection
-        db.session.execute('SELECT 1')
-        return jsonify({
-            "status": "healthy", 
-            "database": "connected"
-        }), 200
+        user_id = get_jwt_identity()
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, name, type, breed, age, created_at 
+            FROM pets WHERE user_id = ? ORDER BY created_at DESC
+        """, (user_id,))
+        
+        pets = []
+        for row in cursor.fetchall():
+            pets.append({
+                'id': row[0],
+                'name': row[1],
+                'type': row[2],
+                'breed': row[3],
+                'age': row[4],
+                'created_at': row[5]
+            })
+        
+        return jsonify({'pets': pets})
+        
     except Exception as e:
-        return jsonify({
-            "status": "unhealthy", 
-            "database": "disconnected",
-            "error": str(e)
-        }), 500
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
-# Initialize database
-@app.before_first_request
-def create_tables():
+@app.route('/api/pets', methods=['POST'])
+@jwt_required()
+def add_pet():
     try:
-        db.create_all()
-        logger.info("Database tables created successfully")
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        name = data.get('name')
+        pet_type = data.get('type')
+        breed = data.get('breed')
+        age = data.get('age')
+        
+        if not name or not pet_type:
+            return jsonify({'error': 'Name and type are required'}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT INTO pets (user_id, name, type, breed, age)
+            OUTPUT INSERTED.id
+            VALUES (?, ?, ?, ?, ?)
+        """, (user_id, name, pet_type, breed, age))
+        
+        pet_id = cursor.fetchone()[0]
+        conn.commit()
+        
+        return jsonify({
+            'message': 'Pet added successfully',
+            'pet_id': pet_id
+        }), 201
+        
     except Exception as e:
-        logger.error(f"Error creating database tables: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+@app.route('/api/bookings', methods=['POST'])
+@jwt_required()
+def create_booking():
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        pet_id = data.get('pet_id')
+        service_type = data.get('service_type')
+        vendor_id = data.get('vendor_id')
+        booking_date = data.get('booking_date')
+        
+        if not all([pet_id, service_type, vendor_id, booking_date]):
+            return jsonify({'error': 'All fields are required'}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT INTO bookings (user_id, pet_id, service_type, vendor_id, booking_date)
+            OUTPUT INSERTED.id
+            VALUES (?, ?, ?, ?, ?)
+        """, (user_id, pet_id, service_type, vendor_id, booking_date))
+        
+        booking_id = cursor.fetchone()[0]
+        conn.commit()
+        
+        return jsonify({
+            'message': 'Booking created successfully',
+            'booking_id': booking_id
+        }), 201
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+@app.route('/api/bookings', methods=['GET'])
+@jwt_required()
+def get_user_bookings():
+    try:
+        user_id = get_jwt_identity()
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT b.id, b.service_type, b.vendor_id, b.booking_date, b.status, b.created_at,
+                   p.name as pet_name
+            FROM bookings b
+            JOIN pets p ON b.pet_id = p.id
+            WHERE b.user_id = ?
+            ORDER BY b.created_at DESC
+        """, (user_id,))
+        
+        bookings = []
+        for row in cursor.fetchall():
+            bookings.append({
+                'id': row[0],
+                'service_type': row[1],
+                'vendor_id': row[2],
+                'booking_date': row[3].isoformat() if row[3] else None,
+                'status': row[4],
+                'created_at': row[5].isoformat() if row[5] else None,
+                'pet_name': row[6]
+            })
+        
+        return jsonify({'bookings': bookings})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+# Public routes
+@app.route('/api/services', methods=['GET'])
+def get_services():
+    services = [
+        {
+            'id': 1,
+            'name': 'Premium Pet Grooming',
+            'description': 'Professional grooming services with certified groomers across Singapore.',
+            'price': 'From $45',
+            'features': ['Full wash & dry service', 'Nail trimming & ear cleaning', 'Professional styling']
+        },
+        {
+            'id': 2,
+            'name': 'Reliable Pet Sitting',
+            'description': 'Experienced pet sitters for day care or overnight stays in your home.',
+            'price': 'From $30/day',
+            'features': ['Background-checked sitters', 'Daily photo updates', 'Exercise & playtime']
+        }
+    ]
+    return jsonify(services)
+
+@app.route('/api/vendors', methods=['GET'])
+def get_vendors():
+    vendors = [
+        {
+            'id': 'paws',
+            'name': 'Paws & Claws Grooming',
+            'rating': 4.9,
+            'services': ['Grooming', 'Breed Specialist'],
+            'price': 'From $45',
+            'availability': {}
+        },
+        {
+            'id': 'happy',
+            'name': 'Happy Tails Pet Hotel',
+            'rating': 4.7,
+            'services': ['Pet Hotel', 'Boarding', 'Day Care'],
+            'price': 'From $60/night',
+            'availability': {}
+        }
+    ]
+    return jsonify(vendors)
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'healthy', 'message': 'PawfectFind API is running'})
 
 if __name__ == '__main__':
-    # For development
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=os.environ.get('FLASK_ENV') == 'development')
+    init_db()
+    app.run(debug=os.getenv('FLASK_ENV') == 'development', host='0.0.0.0', port=5000)
