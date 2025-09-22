@@ -1,24 +1,32 @@
-# Multi-stage build for production
-FROM python:3.11-slim-bullseye as builder
+FROM python:3.11-slim-bullseye
 
 WORKDIR /app
-RUN apt-get update && apt-get install -y gcc && rm -rf /var/lib/apt/lists/*
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+
+# Install system dependencies including ODBC driver
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    unixodbc \
+    unixodbc-dev \
+    curl \
+    && curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - \
+    && curl https://packages.microsoft.com/config/debian/11/prod.list > /etc/apt/sources.list.d/mssql-release.list \
+    && apt-get update \
+    && ACCEPT_EULA=Y apt-get install -y msodbcsql18 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-FROM python:3.11-slim-bullseye
-RUN apt-get update && apt-get install -y && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV FLASK_APP=app.py
-ENV FLASK_ENV=production
-WORKDIR /app
+# Copy application code
 COPY . .
+
+# Create non-root user
 RUN useradd -m -u 1000 flaskuser && chown -R flaskuser:flaskuser /app
 USER flaskuser
+
 EXPOSE 5000
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "app:app"]
+
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "flask_app:app"]
