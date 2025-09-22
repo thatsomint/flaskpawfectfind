@@ -11,10 +11,20 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
+
+# ✅ CORRECTED: Configure JWT first
 app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key-change-in-production')
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
-CORS(app)
 
+# ✅ CORRECTED: Configure CORS properly (ONCE)
+CORS(app, origins=[
+    "http://localhost:3000",  # Local frontend
+    "http://localhost:5000",  # Local backend
+    "https://pawfectfind.azurewebsites.net",  # Production frontend
+    "https://pawfectfind-backend.azurewebsites.net"    # Production backend
+])
+
+# ✅ Initialize JWT after app configuration
 jwt = JWTManager(app)
 
 # Azure SQL Database connection
