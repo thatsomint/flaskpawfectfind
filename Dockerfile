@@ -2,15 +2,16 @@ FROM python:3.11-slim-bullseye
 
 WORKDIR /app
 
-# Install system dependencies including ODBC driver
+# Install system dependencies including ODBC driver - FIXED
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     unixodbc \
     unixodbc-dev \
     curl \
-    && curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - \
-    && curl https://packages.microsoft.com/config/debian/11/prod.list > /etc/apt/sources.list.d/mssql-release.list \
+    gnupg \
+    && curl -sSL https://packages.microsoft.com/keys/microsoft.asc > /etc/apt/trusted.gpg.d/microsoft.asc \
+    && curl -sSL https://packages.microsoft.com/config/debian/11/prod.list > /etc/apt/sources.list.d/mssql-release.list \
     && apt-get update \
     && ACCEPT_EULA=Y apt-get install -y msodbcsql18 \
     && apt-get clean \

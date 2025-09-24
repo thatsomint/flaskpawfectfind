@@ -3,7 +3,7 @@ from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 import pyodbc
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta
 import bcrypt
 from dotenv import load_dotenv
 
@@ -27,13 +27,12 @@ CORS(app, origins=[
 # ✅ Initialize JWT after app configuration
 jwt = JWTManager(app)
 
-# Azure SQL Database connection
+# Azure SQL Database connection (keep your existing function)
 def get_db_connection():
-    # Use environment variable NAMES, not the actual values
-    server = os.getenv('AZURE_SQL_SERVER')  # This should be 'pawfectfinddb.database.windows.net' in your .env
-    database = os.getenv('AZURE_SQL_DATABASE')  # This should be 'pawfectfinddb' in your .env
-    username = os.getenv('AZURE_SQL_USERNAME')  # This should be 'pawfectadmin' in your .env
-    password = os.getenv('AZURE_SQL_PASSWORD')  # This should be 'Password!123' in your .env
+    server = os.getenv('AZURE_SQL_SERVER')
+    database = os.getenv('AZURE_SQL_DATABASE')
+    username = os.getenv('AZURE_SQL_USERNAME')
+    password = os.getenv('AZURE_SQL_PASSWORD')
     driver = '{ODBC Driver 18 for SQL Server}'
     
     connection_string = f"""
@@ -49,7 +48,7 @@ def get_db_connection():
     
     return pyodbc.connect(connection_string)
 
-# Initialize database tables
+# Initialize database tables (keep your existing function)
 def init_db():
     try:
         conn = get_db_connection()
@@ -106,283 +105,95 @@ def init_db():
         if 'conn' in locals():
             conn.close()
 
-# Auth Routes
+# Helper function to generate availability data
+def generate_availability_data():
+    """Generate realistic availability data for vendors"""
+    # Generate dates for the next 30 days
+    base_date = datetime.now()
+    availability_data = {}
+    
+    for i in range(30):
+        date_str = (base_date + timedelta(days=i)).strftime('%Y-%m-%d')
+        
+        # Different availability patterns for different days of the week
+        day_of_week = (base_date + timedelta(days=i)).weekday()
+        
+        if day_of_week in [5, 6]:  # Weekend - more limited availability
+            availability_data[date_str] = ['10:00 AM', '02:00 PM', '04:00 PM']
+        else:  # Weekday - more availability
+            availability_data[date_str] = ['09:00 AM', '10:00 AM', '11:00 AM', '02:00 PM', '03:00 PM', '04:00 PM']
+    
+    return availability_data
+
+def generate_hotel_availability():
+    """Generate different availability pattern for pet hotels"""
+    base_date = datetime.now()
+    availability_data = {}
+    
+    for i in range(30):
+        date_str = (base_date + timedelta(days=i)).strftime('%Y-%m-%d')
+        day_of_week = (base_date + timedelta(days=i)).weekday()
+        
+        # Hotels have different time slots (check-in/check-out times)
+        if day_of_week in [5, 6]:  # Weekend
+            availability_data[date_str] = ['09:00 AM', '11:00 AM', '03:00 PM', '05:00 PM']
+        else:  # Weekday
+            availability_data[date_str] = ['08:00 AM', '10:00 AM', '12:00 PM', '02:00 PM', '04:00 PM', '06:00 PM']
+    
+    return availability_data
+
+def generate_training_availability():
+    """Generate availability for training services"""
+    base_date = datetime.now()
+    availability_data = {}
+    
+    for i in range(30):
+        date_str = (base_date + timedelta(days=i)).strftime('%Y-%m-%d')
+        day_of_week = (base_date + timedelta(days=i)).weekday()
+        
+        # Training sessions typically have specific time blocks
+        if day_of_week in [5, 6]:  # Weekend
+            availability_data[date_str] = ['09:00 AM', '11:00 AM', '02:00 PM']
+        else:  # Weekday
+            availability_data[date_str] = ['08:00 AM', '10:00 AM', '01:00 PM', '03:00 PM', '05:00 PM']
+    
+    return availability_data
+
+# Keep all your existing auth routes (register, login, profile, pets, bookings)
 @app.route('/api/auth/register', methods=['POST'])
 def register():
-    try:
-        data = request.get_json()
-        email = data.get('email')
-        password = data.get('password')
-        full_name = data.get('full_name')
-        phone_number = data.get('phone_number')
-        
-        if not email or not password or not full_name:
-            return jsonify({'error': 'Email, password, and full name are required'}), 400
-        
-        # Hash password
-        password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Check if user already exists
-        cursor.execute("SELECT id FROM users WHERE email = ?", (email,))
-        if cursor.fetchone():
-            return jsonify({'error': 'User already exists'}), 409
-        
-        # Insert new user
-        cursor.execute("""
-            INSERT INTO users (email, password_hash, full_name, phone_number)
-            OUTPUT INSERTED.id
-            VALUES (?, ?, ?, ?)
-        """, (email, password_hash, full_name, phone_number))
-        
-        user_id = cursor.fetchone()[0]
-        conn.commit()
-        
-        # Create access token
-        access_token = create_access_token(identity=str(user_id))
-        
-        return jsonify({
-            'message': 'User registered successfully',
-            'access_token': access_token,
-            'user': {
-                'id': user_id,
-                'email': email,
-                'full_name': full_name
-            }
-        }), 201
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
+    # ... keep your existing register code ...
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
-    try:
-        data = request.get_json()
-        email = data.get('email')
-        password = data.get('password')
-        
-        if not email or not password:
-            return jsonify({'error': 'Email and password are required'}), 400
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT id, email, password_hash, full_name FROM users WHERE email = ?
-        """, (email,))
-        
-        user = cursor.fetchone()
-        
-        if not user or not bcrypt.checkpw(password.encode('utf-8'), user[2].encode('utf-8')):
-            return jsonify({'error': 'Invalid credentials'}), 401
-        
-        access_token = create_access_token(identity=str(user[0]))
-        
-        return jsonify({
-            'message': 'Login successful',
-            'access_token': access_token,
-            'user': {
-                'id': user[0],
-                'email': user[1],
-                'full_name': user[3]
-            }
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
+    # ... keep your existing login code ...
 
-# Protected Routes
 @app.route('/api/profile', methods=['GET'])
 @jwt_required()
 def get_profile():
-    try:
-        user_id = get_jwt_identity()
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT id, email, full_name, phone_number, created_at 
-            FROM users WHERE id = ?
-        """, (user_id,))
-        
-        user = cursor.fetchone()
-        
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
-        
-        return jsonify({
-            'user': {
-                'id': user[0],
-                'email': user[1],
-                'full_name': user[2],
-                'phone_number': user[3],
-                'created_at': user[4]
-            }
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
+    # ... keep your existing profile code ...
 
 @app.route('/api/pets', methods=['GET'])
 @jwt_required()
 def get_user_pets():
-    try:
-        user_id = get_jwt_identity()
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT id, name, type, breed, age, created_at 
-            FROM pets WHERE user_id = ? ORDER BY created_at DESC
-        """, (user_id,))
-        
-        pets = []
-        for row in cursor.fetchall():
-            pets.append({
-                'id': row[0],
-                'name': row[1],
-                'type': row[2],
-                'breed': row[3],
-                'age': row[4],
-                'created_at': row[5]
-            })
-        
-        return jsonify({'pets': pets})
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
+    # ... keep your existing pets code ...
 
 @app.route('/api/pets', methods=['POST'])
 @jwt_required()
 def add_pet():
-    try:
-        user_id = get_jwt_identity()
-        data = request.get_json()
-        
-        name = data.get('name')
-        pet_type = data.get('type')
-        breed = data.get('breed')
-        age = data.get('age')
-        
-        if not name or not pet_type:
-            return jsonify({'error': 'Name and type are required'}), 400
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            INSERT INTO pets (user_id, name, type, breed, age)
-            OUTPUT INSERTED.id
-            VALUES (?, ?, ?, ?, ?)
-        """, (user_id, name, pet_type, breed, age))
-        
-        pet_id = cursor.fetchone()[0]
-        conn.commit()
-        
-        return jsonify({
-            'message': 'Pet added successfully',
-            'pet_id': pet_id
-        }), 201
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
+    # ... keep your existing add_pet code ...
 
 @app.route('/api/bookings', methods=['POST'])
 @jwt_required()
 def create_booking():
-    try:
-        user_id = get_jwt_identity()
-        data = request.get_json()
-        
-        pet_id = data.get('pet_id')
-        service_type = data.get('service_type')
-        vendor_id = data.get('vendor_id')
-        booking_date = data.get('booking_date')
-        
-        if not all([pet_id, service_type, vendor_id, booking_date]):
-            return jsonify({'error': 'All fields are required'}), 400
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            INSERT INTO bookings (user_id, pet_id, service_type, vendor_id, booking_date)
-            OUTPUT INSERTED.id
-            VALUES (?, ?, ?, ?, ?)
-        """, (user_id, pet_id, service_type, vendor_id, booking_date))
-        
-        booking_id = cursor.fetchone()[0]
-        conn.commit()
-        
-        return jsonify({
-            'message': 'Booking created successfully',
-            'booking_id': booking_id
-        }), 201
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
+    # ... keep your existing create_booking code ...
 
 @app.route('/api/bookings', methods=['GET'])
 @jwt_required()
 def get_user_bookings():
-    try:
-        user_id = get_jwt_identity()
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT b.id, b.service_type, b.vendor_id, b.booking_date, b.status, b.created_at,
-                   p.name as pet_name
-            FROM bookings b
-            JOIN pets p ON b.pet_id = p.id
-            WHERE b.user_id = ?
-            ORDER BY b.created_at DESC
-        """, (user_id,))
-        
-        bookings = []
-        for row in cursor.fetchall():
-            bookings.append({
-                'id': row[0],
-                'service_type': row[1],
-                'vendor_id': row[2],
-                'booking_date': row[3].isoformat() if row[3] else None,
-                'status': row[4],
-                'created_at': row[5].isoformat() if row[5] else None,
-                'pet_name': row[6]
-            })
-        
-        return jsonify({'bookings': bookings})
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
+    # ... keep your existing get_bookings code ...
 
-# Public routes
+# UPDATED Public routes with proper availability data
 @app.route('/api/services', methods=['GET'])
 def get_services():
     services = [
@@ -399,10 +210,25 @@ def get_services():
             'description': 'Experienced pet sitters for day care or overnight stays in your home.',
             'price': 'From $30/day',
             'features': ['Background-checked sitters', 'Daily photo updates', 'Exercise & playtime']
+        },
+        {
+            'id': 3,
+            'name': 'Premium Pet Hotels',
+            'description': '5-star boarding facilities with round-the-clock care and supervision.',
+            'price': 'From $60/night',
+            'features': ['Climate-controlled suites', '24/7 veterinary support', 'Daily exercise programs']
+        },
+        {
+            'id': 4,
+            'name': 'Professional Pet Training',
+            'description': 'Certified trainers for obedience training and behavioral modification.',
+            'price': 'From $75/session',
+            'features': ['Obedience training', 'Puppy classes', 'Behavioral consultation']
         }
     ]
     return jsonify(services)
 
+# UPDATED Vendors endpoint with proper availability data
 @app.route('/api/vendors', methods=['GET'])
 def get_vendors():
     vendors = [
@@ -412,7 +238,7 @@ def get_vendors():
             'rating': 4.9,
             'services': ['Grooming', 'Breed Specialist'],
             'price': 'From $45',
-            'availability': {}
+            'availableSlots': generate_availability_data()  # CHANGED from 'availability' to 'availableSlots'
         },
         {
             'id': 'happy',
@@ -420,10 +246,67 @@ def get_vendors():
             'rating': 4.7,
             'services': ['Pet Hotel', 'Boarding', 'Day Care'],
             'price': 'From $60/night',
-            'availability': {}
+            'availableSlots': generate_hotel_availability()  # CHANGED from 'availability' to 'availableSlots'
+        },
+        {
+            'id': 'bark',
+            'name': 'Bark Avenue Training',
+            'rating': 4.8,
+            'services': ['Obedience Training', 'Puppy Classes', 'Behavioral'],
+            'price': 'From $75/session',
+            'availableSlots': generate_training_availability()  # CHANGED from 'availability' to 'availableSlots'
+        },
+        {
+            'id': 'whiskers',
+            'name': 'Whiskers Wellness',
+            'rating': 4.6,
+            'services': ['Veterinary', 'Wellness', 'Dental Care'],
+            'price': 'From $55',
+            'availableSlots': generate_availability_data()  # CHANGED from 'availability' to 'availableSlots'
+        },
+        {
+            'id': 'furry',
+            'name': 'Furry Friends Grooming',
+            'rating': 4.5,
+            'services': ['Grooming', 'Small Animals'],
+            'price': 'From $35',
+            'availableSlots': generate_availability_data()  # CHANGED from 'availability' to 'availableSlots'
         }
     ]
     return jsonify(vendors)
+
+# New endpoint to get vendor availability for a specific date
+@app.route('/api/vendors/<vendor_id>/availability/<date>', methods=['GET'])
+def get_vendor_availability(vendor_id, date):
+    """Get specific availability for a vendor on a given date"""
+    try:
+        # Validate date format
+        try:
+            datetime.strptime(date, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+        
+        vendors_data = {
+            'paws': generate_availability_data(),
+            'happy': generate_hotel_availability(),
+            'bark': generate_training_availability(),
+            'whiskers': generate_availability_data(),
+            'furry': generate_availability_data()
+        }
+        
+        if vendor_id not in vendors_data:
+            return jsonify({'error': 'Vendor not found'}), 404
+        
+        availability = vendors_data[vendor_id].get(date, [])
+        
+        return jsonify({
+            'vendor_id': vendor_id,
+            'date': date,
+            'availableSlots': availability
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
