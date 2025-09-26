@@ -6,6 +6,10 @@ import os
 from datetime import datetime, timedelta
 import bcrypt
 from dotenv import load_dotenv
+from azure.servicebus import ServiceBusClient, ServiceBusMessage
+import json
+import stripe
+import bcrypt
 
 # Load environment variables
 load_dotenv()
@@ -159,39 +163,276 @@ def generate_training_availability():
     
     return availability_data
 
-# Keep all your existing auth routes (register, login, profile, pets, bookings)
+# Azure Service Bus configuration (MOVE THIS UP)
+SERVICE_BUS_CONNECTION_STRING = os.getenv('SERVICE_BUS_CONNECTION_STRING')
+BOOKING_QUEUE_NAME = "booking-queue"
+
+def send_booking_to_queue(booking_data):
+    """Send booking to Azure Service Bus queue"""
+    try:
+        servicebus_client = ServiceBusClient.from_connection_string(SERVICE_BUS_CONNECTION_STRING)
+        with servicebus_client:
+            sender = servicebus_client.get_queue_sender(BOOKING_QUEUE_NAME)
+            with sender:
+                message = ServiceBusMessage(json.dumps(booking_data))
+                sender.send_messages(message)
+        return True
+    except Exception as e:
+        print(f"Error sending to Service Bus: {e}")
+        return False
+
+# Stripe configuration (MOVE THIS UP)
+stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
+
+# Complete authentication and user management routes
 @app.route('/api/auth/register', methods=['POST'])
 def register():
-    # ... keep your existing register code ...
+    """Register a new user"""
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['email', 'password', 'full_name']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
+        
+        email = data['email']
+        password = data['password']
+        full_name = data['full_name']
+        phone_number = data.get('phone_number')
+        
+        # Check if user already exists
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM users WHERE email = ?", email)
+        if cursor.fetchone():
+            return jsonify({'error': 'User already exists with this email'}), 400
+        
+        # Hash password
+        password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        
+        # Create user
+        cursor.execute("""
+            INSERT INTO users (email, password_hash, full_name, phone_number)
+            VALUES (?, ?, ?, ?)
+        """, email, password_hash, full_name, phone_number)
+        
+        user_id = cursor.fetchval("SELECT SCOPE_IDENTITY()")
+        conn.commit()
+        
+        # Generate JWT token
+        access_token = create_access_token(identity=user_id)
+        
+        return jsonify({
+            'message': 'User registered successfully',
+            'access_token': access_token,
+            'user': {
+                'id': user_id,
+                'email': email,
+                'full_name': full_name,
+                'phone_number': phone_number
+            }
+        }), 201
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
-    # ... keep your existing login code ...
+    """Login user"""
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        if 'email' not in data or 'password' not in data:
+            return jsonify({'error': 'Email and password are required'}), 400
+        
+        email = data['email']
+        password = data['password']
+        
+        # Find user
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, email, password_hash, full_name, phone_number 
+            FROM users WHERE email = ?
+        """, email)
+        
+        user = cursor.fetchone()
+        if not user:
+            return jsonify({'error': 'Invalid email or password'}), 401
+        
+        # Verify password
+        if not bcrypt.checkpw(password.encode('utf-8'), user.password_hash.encode('utf-8')):
+            return jsonify({'error': 'Invalid email or password'}), 401
+        
+        # Generate JWT token
+        access_token = create_access_token(identity=user.id)
+        
+        return jsonify({
+            'message': 'Login successful',
+            'access_token': access_token,
+            'user': {
+                'id': user.id,
+                'email': user.email,
+                'full_name': user.full_name,
+                'phone_number': user.phone_number
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 @app.route('/api/profile', methods=['GET'])
 @jwt_required()
 def get_profile():
-    # ... keep your existing profile code ...
+    """Get user profile"""
+    try:
+        user_id = get_jwt_identity()
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, email, full_name, phone_number, created_at 
+            FROM users WHERE id = ?
+        """, user_id)
+        
+        user = cursor.fetchone()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        return jsonify({
+            'id': user.id,
+            'email': user.email,
+            'full_name': user.full_name,
+            'phone_number': user.phone_number,
+            'created_at': user.created_at.isoformat() if user.created_at else None
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 @app.route('/api/pets', methods=['GET'])
 @jwt_required()
 def get_user_pets():
-    # ... keep your existing pets code ...
+    """Get all pets for the current user"""
+    try:
+        user_id = get_jwt_identity()
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, name, type, breed, age, created_at 
+            FROM pets WHERE user_id = ? ORDER BY created_at DESC
+        """, user_id)
+        
+        pets = []
+        for row in cursor.fetchall():
+            pets.append({
+                'id': row.id,
+                'name': row.name,
+                'type': row.type,
+                'breed': row.breed,
+                'age': row.age,
+                'created_at': row.created_at.isoformat() if row.created_at else None
+            })
+        
+        return jsonify(pets)
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 @app.route('/api/pets', methods=['POST'])
 @jwt_required()
 def add_pet():
-    # ... keep your existing add_pet code ...
-
-@app.route('/api/bookings', methods=['POST'])
-@jwt_required()
-def create_booking():
-    # ... keep your existing create_booking code ...
+    """Add a new pet for the current user"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['name', 'type']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
+        
+        name = data['name']
+        pet_type = data['type']
+        breed = data.get('breed')
+        age = data.get('age')
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO pets (user_id, name, type, breed, age)
+            VALUES (?, ?, ?, ?, ?)
+        """, user_id, name, pet_type, breed, age)
+        
+        pet_id = cursor.fetchval("SELECT SCOPE_IDENTITY()")
+        conn.commit()
+        
+        return jsonify({
+            'message': 'Pet added successfully',
+            'pet_id': pet_id
+        }), 201
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 @app.route('/api/bookings', methods=['GET'])
 @jwt_required()
 def get_user_bookings():
-    # ... keep your existing get_bookings code ...
+    """Get all bookings for the current user"""
+    try:
+        user_id = get_jwt_identity()
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT b.id, b.service_type, b.vendor_id, b.booking_date, b.status, b.created_at,
+                   p.name as pet_name, p.type as pet_type
+            FROM bookings b
+            LEFT JOIN pets p ON b.pet_id = p.id
+            WHERE b.user_id = ? 
+            ORDER BY b.booking_date DESC
+        """, user_id)
+        
+        bookings = []
+        for row in cursor.fetchall():
+            bookings.append({
+                'id': row.id,
+                'service_type': row.service_type,
+                'vendor_id': row.vendor_id,
+                'booking_date': row.booking_date.isoformat() if row.booking_date else None,
+                'status': row.status,
+                'pet_name': row.pet_name,
+                'pet_type': row.pet_type,
+                'created_at': row.created_at.isoformat() if row.created_at else None
+            })
+        
+        return jsonify(bookings)
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 # UPDATED Public routes with proper availability data
 @app.route('/api/services', methods=['GET'])
@@ -312,6 +553,81 @@ def get_vendor_availability(vendor_id, date):
 def health_check():
     return jsonify({'status': 'healthy', 'message': 'PawfectFind API is running'})
 
+@app.route('/api/bookings', methods=['POST'])
+@jwt_required()
+def create_booking():
+    """Create a new booking with Service Bus integration"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['pet_id', 'service_type', 'vendor_id', 'booking_date', 'booking_time']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
+        
+        # Create booking in database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT INTO bookings (user_id, pet_id, service_type, vendor_id, booking_date, status)
+            VALUES (?, ?, ?, ?, ?, 'pending')
+        """, user_id, data['pet_id'], data['service_type'], data['vendor_id'], data['booking_date'])
+        
+        booking_id = cursor.fetchval("SELECT SCOPE_IDENTITY()")
+        conn.commit()
+        
+        # Prepare booking data for Service Bus
+        booking_data = {
+            'booking_id': booking_id,
+            'user_id': user_id,
+            'service_type': data['service_type'],
+            'vendor_id': data['vendor_id'],
+            'booking_date': data['booking_date'],
+            'booking_time': data['booking_time'],
+            'status': 'pending'
+        }
+        
+        # Send to Service Bus queue
+        if send_booking_to_queue(booking_data):
+            return jsonify({
+                'message': 'Booking created successfully',
+                'booking_id': booking_id,
+                'status': 'pending'
+            }), 201
+        else:
+            return jsonify({'error': 'Booking created but queue service unavailable'}), 201
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/create-payment-intent', methods=['POST'])
+@jwt_required()
+def create_payment_intent():
+    try:
+        data = request.get_json()
+        amount = data['amount']  # Amount in cents
+        
+        # Create PaymentIntent
+        intent = stripe.PaymentIntent.create(
+            amount=amount,
+            currency='sgd',
+            metadata={
+                'booking_id': data.get('booking_id'),
+                'user_id': get_jwt_identity()
+            }
+        )
+        
+        return jsonify({
+            'clientSecret': intent.client_secret
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     init_db()
     app.run(debug=os.getenv('FLASK_ENV') == 'development', host='0.0.0.0', port=5000)
+
