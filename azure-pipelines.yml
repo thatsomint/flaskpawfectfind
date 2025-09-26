@@ -6,7 +6,9 @@ resources:
 
 variables:
   # Container registry service connection (you'll need to create this for the backend repo)
-  dockerRegistryServiceConnection: 'pawfectfind-backend-acr'  # You'll create this
+  #dockerRegistryServiceConnection: 'pawfectfind-backend-acr'  # You'll create this
+  # Use the SAME connection that works for frontend
+  dockerRegistryServiceConnection: 'b7697af7-b180-4ac7-bbba-b025f0d3bcdd'
   imageRepository: 'pawfectfind-backend'
   containerRegistry: 'pawfectfind.azurecr.io'
   dockerfilePath: 'Dockerfile'
