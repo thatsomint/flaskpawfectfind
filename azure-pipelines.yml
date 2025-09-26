@@ -1,0 +1,54 @@
+trigger:
+- main
+
+resources:
+- repo: self
+
+variables:
+  # Container registry service connection (you'll need to create this for the backend repo)
+  dockerRegistryServiceConnection: 'pawfectfind-backend-acr'  # You'll create this
+  imageRepository: 'pawfectfind-backend'
+  containerRegistry: 'pawfectfind.azurecr.io'
+  dockerfilePath: 'Dockerfile'
+  tag: '$(Build.BuildId)'
+  
+  # Backend Web App settings
+  webAppName: 'pawfectfind-backend'
+  resourceGroup: 'PawfectFind-RG'
+  azureSubscription: 'pawfectfind-azure'
+
+stages:
+- stage: Build
+  displayName: Build and push backend
+  jobs:
+  - job: Build
+    displayName: Build backend
+    pool: Default
+    steps:
+    - task: Docker@2
+      displayName: Build and push backend image
+      inputs:
+        command: buildAndPush
+        repository: $(imageRepository)
+        dockerfile: $(dockerfilePath)
+        containerRegistry: $(dockerRegistryServiceConnection)
+        tags: |
+          $(tag)
+          latest
+
+- stage: Deploy
+  displayName: Deploy backend
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - job: Deploy
+    displayName: Deploy backend
+    pool: Default
+    steps:
+    - task: AzureWebAppContainer@1
+      displayName: 'Deploy backend to Azure Web App'
+      inputs:
+        azureSubscription: '$(azureSubscription)'
+        appName: '$(webAppName)'
+        containers: '$(containerRegistry)/$(imageRepository):$(tag)'
+        resourceGroupName: '$(resourceGroup)'
