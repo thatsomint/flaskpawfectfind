@@ -9,18 +9,17 @@ from dotenv import load_dotenv
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
 import json
 import stripe
-import bcrypt
 
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 
-# ✅ CORRECTED: Configure JWT first
+# Configure JWT first
 app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key-change-in-production')
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
 
-# ✅ CORRECTED: Configure CORS properly (ONCE)
+# Configure CORS properly (ONCE)
 CORS(app, origins=[
     "http://localhost:3000",  # Local frontend
     "http://localhost:5000",  # Local backend
@@ -28,10 +27,10 @@ CORS(app, origins=[
     "https://pawfectfind-backend.azurewebsites.net"    # Production backend
 ])
 
-# ✅ Initialize JWT after app configuration
+# Initialize JWT after app configuration
 jwt = JWTManager(app)
 
-# Azure SQL Database connection (keep your existing function)
+# Azure SQL Database connection
 def get_db_connection():
     server = os.getenv('AZURE_SQL_SERVER')
     database = os.getenv('AZURE_SQL_DATABASE')
@@ -52,7 +51,7 @@ def get_db_connection():
     
     return pyodbc.connect(connection_string)
 
-# Initialize database tables (keep your existing function)
+# Initialize database tables with extended availability
 def init_db():
     try:
         conn = get_db_connection()
@@ -95,13 +94,114 @@ def init_db():
                 service_type NVARCHAR(100) NOT NULL,
                 vendor_id NVARCHAR(100) NOT NULL,
                 booking_date DATE NOT NULL,
+                booking_time NVARCHAR(50) NOT NULL,
                 status NVARCHAR(50) DEFAULT 'pending',
                 created_at DATETIME2 DEFAULT GETDATE()
             )
         """)
         
-        conn.commit()
-        print("Database tables initialized successfully")
+        # Create Vendors table if not exists
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Vendors' AND xtype='U')
+            CREATE TABLE Vendors (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                name NVARCHAR(100) NOT NULL,
+                rating DECIMAL(2,1) NOT NULL,
+                price NVARCHAR(50) NOT NULL,
+                services NVARCHAR(MAX) NOT NULL,
+                location NVARCHAR(100),
+                description NVARCHAR(500),
+                created_at DATETIME2 DEFAULT GETDATE()
+            )
+        """)
+        
+        # Create VendorAvailability table if not exists
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='VendorAvailability' AND xtype='U')
+            CREATE TABLE VendorAvailability (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                vendor_id INT NOT NULL,
+                date DATE NOT NULL,
+                available_slots NVARCHAR(MAX) NOT NULL,
+                FOREIGN KEY (vendor_id) REFERENCES Vendors(id),
+                UNIQUE (vendor_id, date)
+            )
+        """)
+        
+        # Check if vendors already exist
+        cursor.execute("SELECT COUNT(*) FROM Vendors")
+        vendor_count = cursor.fetchone()[0]
+        
+        if vendor_count == 0:
+            print("Initializing vendors and availability data...")
+            
+            # Insert comprehensive vendor data
+            vendors_data = [
+                ('Paws & Claws Grooming', 4.8, 'From $45', '["Grooming", "Bathing", "Nail Trimming", "Haircut"]', 'Central Singapore', 'Professional grooming with certified experts'),
+                ('Happy Tails Pet Hotel', 4.9, 'From $60/night', '["Pet Hotel", "Boarding", "Day Care", "Luxury Suites"]', 'East Singapore', '5-star luxury pet boarding facility'),
+                ('Pet Paradise Sitters', 4.7, 'From $30/day', '["Sitter", "Pet Sitting", "Home Visits", "Overnight Stays"]', 'West Singapore', 'Trusted in-home pet sitting services'),
+                ('Elite Pet Training', 4.6, 'From $80/session', '["Training", "Behavioral Training", "Obedience", "Puppy Classes"]', 'North Singapore', 'Certified professional dog trainers'),
+                ('Premium Pet Groomers', 4.8, 'From $55', '["Grooming", "Styling", "Spa Treatment", "De-shedding"]', 'Central Singapore', 'Premium grooming with spa treatments'),
+                ('Cosy Pet Retreat', 4.9, 'From $70/night', '["Pet Hotel", "Luxury Boarding", "Play Areas", "Webcam Access"]', 'South Singapore', 'Luxury retreat with 24/7 webcam access'),
+                ('Trusted Pet Minders', 4.7, 'From $35/day', '["Sitter", "Overnight Stays", "Walking", "Medication"]', 'Central Singapore', 'Experienced pet minders for all needs'),
+                ('Professional Pet Trainers', 4.5, 'From $75/session', '["Training", "Puppy Training", "Agility", "Behavioral"]', 'East Singapore', 'Specialized training programs')
+            ]
+            
+            for vendor in vendors_data:
+                cursor.execute("""
+                    INSERT INTO Vendors (name, rating, price, services, location, description)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, vendor[0], vendor[1], vendor[2], vendor[3], vendor[4], vendor[5])
+            
+            # Generate availability for the next 90 days with realistic patterns
+            base_date = datetime.now()
+            print("Generating availability data for 90 days...")
+            
+            for i in range(90):  # 90 days of availability
+                current_date = (base_date + timedelta(days=i))
+                date_str = current_date.strftime('%Y-%m-%d')
+                day_of_week = current_date.weekday()
+                
+                # Different availability patterns based on vendor type and day of week
+                for vendor_id in range(1, 9):  # For all 8 vendors
+                    if vendor_id in [1, 5]:  # Grooming services
+                        if day_of_week in [5, 6]:  # Weekend
+                            slots = ['09:00 AM', '10:30 AM', '02:00 PM', '03:30 PM']
+                        else:  # Weekday
+                            slots = ['09:00 AM', '10:00 AM', '11:00 AM', '02:00 PM', '03:00 PM', '04:00 PM']
+                    
+                    elif vendor_id in [2, 6]:  # Pet hotels
+                        if day_of_week in [5, 6]:  # Weekend
+                            slots = ['08:00 AM', '10:00 AM', '12:00 PM', '02:00 PM', '04:00 PM']
+                        else:  # Weekday
+                            slots = ['07:00 AM', '09:00 AM', '11:00 AM', '01:00 PM', '03:00 PM', '05:00 PM']
+                    
+                    elif vendor_id in [3, 7]:  # Pet sitters
+                        if day_of_week in [5, 6]:  # Weekend
+                            slots = ['08:00 AM', '12:00 PM', '04:00 PM', '06:00 PM']
+                        else:  # Weekday
+                            slots = ['07:00 AM', '08:00 AM', '05:00 PM', '06:00 PM', '07:00 PM']
+                    
+                    else:  # Training services (4, 8)
+                        if day_of_week in [5, 6]:  # Weekend
+                            slots = ['09:00 AM', '11:00 AM', '02:00 PM', '04:00 PM']
+                        else:  # Weekday
+                            slots = ['08:00 AM', '10:00 AM', '01:00 PM', '03:00 PM', '05:00 PM']
+                    
+                    # Add some random unavailability (10% chance for any given date)
+                    import random
+                    if random.random() > 0.1:  # 90% available
+                        cursor.execute("""
+                            INSERT INTO VendorAvailability (vendor_id, date, available_slots)
+                            VALUES (?, ?, ?)
+                        """, vendor_id, date_str, json.dumps(slots))
+            
+            conn.commit()
+            print("Vendors and availability data initialized successfully")
+        else:
+            print(f"Vendors table already contains {vendor_count} vendors")
+        
+        print("All database tables initialized successfully")
         
     except Exception as e:
         print(f"Error initializing database: {str(e)}")
@@ -109,28 +209,9 @@ def init_db():
         if 'conn' in locals():
             conn.close()
 
-# Helper function to generate availability data
-def generate_availability_data():
-    """Generate realistic availability data for vendors"""
-    # Generate dates for the next 30 days
-    base_date = datetime.now()
-    availability_data = {}
-    
-    for i in range(30):
-        date_str = (base_date + timedelta(days=i)).strftime('%Y-%m-%d')
-        
-        # Different availability patterns for different days of the week
-        day_of_week = (base_date + timedelta(days=i)).weekday()
-        
-        if day_of_week in [5, 6]:  # Weekend - more limited availability
-            availability_data[date_str] = ['10:00 AM', '02:00 PM', '04:00 PM']
-        else:  # Weekday - more availability
-            availability_data[date_str] = ['09:00 AM', '10:00 AM', '11:00 AM', '02:00 PM', '03:00 PM', '04:00 PM']
-    
-    return availability_data
-
-def generate_hotel_availability():
-    """Generate different availability pattern for pet hotels"""
+# Helper function to generate fallback availability data
+def generate_fallback_availability():
+    """Generate fallback availability data for 30 days"""
     base_date = datetime.now()
     availability_data = {}
     
@@ -138,32 +219,14 @@ def generate_hotel_availability():
         date_str = (base_date + timedelta(days=i)).strftime('%Y-%m-%d')
         day_of_week = (base_date + timedelta(days=i)).weekday()
         
-        # Hotels have different time slots (check-in/check-out times)
         if day_of_week in [5, 6]:  # Weekend
-            availability_data[date_str] = ['09:00 AM', '11:00 AM', '03:00 PM', '05:00 PM']
+            availability_data[date_str] = ['09:00 AM', '11:00 AM', '02:00 PM', '04:00 PM']
         else:  # Weekday
-            availability_data[date_str] = ['08:00 AM', '10:00 AM', '12:00 PM', '02:00 PM', '04:00 PM', '06:00 PM']
+            availability_data[date_str] = ['08:00 AM', '09:00 AM', '10:00 AM', '02:00 PM', '03:00 PM', '04:00 PM']
     
     return availability_data
 
-def generate_training_availability():
-    """Generate availability for training services"""
-    base_date = datetime.now()
-    availability_data = {}
-    
-    for i in range(30):
-        date_str = (base_date + timedelta(days=i)).strftime('%Y-%m-%d')
-        day_of_week = (base_date + timedelta(days=i)).weekday()
-        
-        # Training sessions typically have specific time blocks
-        if day_of_week in [5, 6]:  # Weekend
-            availability_data[date_str] = ['09:00 AM', '11:00 AM', '02:00 PM']
-        else:  # Weekday
-            availability_data[date_str] = ['08:00 AM', '10:00 AM', '01:00 PM', '03:00 PM', '05:00 PM']
-    
-    return availability_data
-
-# Azure Service Bus configuration (MOVE THIS UP)
+# Azure Service Bus configuration
 SERVICE_BUS_CONNECTION_STRING = os.getenv('SERVICE_BUS_CONNECTION_STRING')
 BOOKING_QUEUE_NAME = "booking-queue"
 
@@ -181,10 +244,11 @@ def send_booking_to_queue(booking_data):
         print(f"Error sending to Service Bus: {e}")
         return False
 
-# Stripe configuration (MOVE THIS UP)
+# Stripe configuration
 stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
 
-# Complete authentication and user management routes
+# ===== AUTHENTICATION ROUTES =====
+
 @app.route('/api/auth/register', methods=['POST'])
 def register():
     """Register a new user"""
@@ -322,6 +386,8 @@ def get_profile():
         if 'conn' in locals():
             conn.close()
 
+# ===== PETS ROUTES =====
+
 @app.route('/api/pets', methods=['GET'])
 @jwt_required()
 def get_user_pets():
@@ -395,6 +461,8 @@ def add_pet():
         if 'conn' in locals():
             conn.close()
 
+# ===== BOOKINGS ROUTES =====
+
 @app.route('/api/bookings', methods=['GET'])
 @jwt_required()
 def get_user_bookings():
@@ -405,7 +473,7 @@ def get_user_bookings():
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT b.id, b.service_type, b.vendor_id, b.booking_date, b.status, b.created_at,
+            SELECT b.id, b.service_type, b.vendor_id, b.booking_date, b.booking_time, b.status, b.created_at,
                    p.name as pet_name, p.type as pet_type
             FROM bookings b
             LEFT JOIN pets p ON b.pet_id = p.id
@@ -420,6 +488,7 @@ def get_user_bookings():
                 'service_type': row.service_type,
                 'vendor_id': row.vendor_id,
                 'booking_date': row.booking_date.isoformat() if row.booking_date else None,
+                'booking_time': row.booking_time,
                 'status': row.status,
                 'pet_name': row.pet_name,
                 'pet_type': row.pet_type,
@@ -434,7 +503,159 @@ def get_user_bookings():
         if 'conn' in locals():
             conn.close()
 
-# UPDATED Public routes with proper availability data
+@app.route('/api/bookings', methods=['POST'])
+@jwt_required()
+def create_booking():
+    """Create a new booking with Service Bus integration"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['pet_id', 'service_type', 'vendor_id', 'booking_date', 'booking_time']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
+        
+        # Create booking in database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT INTO bookings (user_id, pet_id, service_type, vendor_id, booking_date, booking_time, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'confirmed')
+        """, user_id, data['pet_id'], data['service_type'], data['vendor_id'], data['booking_date'], data['booking_time'])
+        
+        booking_id = cursor.fetchval("SELECT SCOPE_IDENTITY()")
+        conn.commit()
+        
+        # Prepare booking data for Service Bus
+        booking_data = {
+            'booking_id': booking_id,
+            'user_id': user_id,
+            'service_type': data['service_type'],
+            'vendor_id': data['vendor_id'],
+            'booking_date': data['booking_date'],
+            'booking_time': data['booking_time'],
+            'status': 'confirmed'
+        }
+        
+        # Send to Service Bus queue
+        if send_booking_to_queue(booking_data):
+            return jsonify({
+                'message': 'Booking created successfully',
+                'booking_id': booking_id,
+                'status': 'confirmed'
+            }), 201
+        else:
+            return jsonify({'error': 'Booking created but queue service unavailable'}), 201
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ===== VENDORS ROUTES =====
+
+@app.route('/api/vendors', methods=['GET'])
+def get_vendors():
+    """Get all vendors from Azure SQL database"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Query to get all vendors with additional details
+        cursor.execute("SELECT id, name, rating, price, services, location, description FROM Vendors ORDER BY rating DESC")
+        
+        vendors = []
+        for row in cursor.fetchall():
+            # Parse the services JSON string
+            try:
+                services = json.loads(row.services) if row.services else []
+            except:
+                services = []
+            
+            vendors.append({
+                'id': row.id,
+                'name': row.name,
+                'rating': float(row.rating),
+                'price': row.price,
+                'services': services,
+                'location': row.location,
+                'description': row.description
+            })
+        
+        return jsonify(vendors)
+        
+    except Exception as e:
+        print(f"Error fetching vendors from database: {str(e)}")
+        # Fallback to minimal data if database fails
+        fallback_vendors = [
+            {
+                'id': 1,
+                'name': 'Paws & Claws Grooming',
+                'rating': 4.8,
+                'price': 'From $45',
+                'services': ['Grooming', 'Bathing', 'Nail Trimming'],
+                'location': 'Central Singapore',
+                'description': 'Professional grooming services'
+            }
+        ]
+        return jsonify(fallback_vendors)
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+@app.route('/api/vendors/<int:vendor_id>/availability/<date>', methods=['GET'])
+def get_vendor_availability(vendor_id, date):
+    """Get vendor availability from Azure SQL database"""
+    try:
+        # Validate date format
+        try:
+            datetime.strptime(date, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Query to get availability for specific vendor and date
+        cursor.execute("""
+            SELECT available_slots 
+            FROM VendorAvailability 
+            WHERE vendor_id = ? AND date = ?
+        """, vendor_id, date)
+        
+        result = cursor.fetchone()
+        
+        if result:
+            try:
+                available_slots = json.loads(result.available_slots) if result.available_slots else []
+            except:
+                available_slots = []
+        else:
+            # No availability found for this date
+            available_slots = []
+        
+        return jsonify({
+            'vendor_id': vendor_id,
+            'date': date,
+            'availableSlots': available_slots
+        })
+        
+    except Exception as e:
+        print(f"Error fetching vendor availability: {str(e)}")
+        # Fallback to generated availability
+        fallback_data = generate_fallback_availability()
+        return jsonify({
+            'vendor_id': vendor_id,
+            'date': date,
+            'availableSlots': fallback_data.get(date, [])
+        })
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+# ===== SERVICES ROUTES =====
+
 @app.route('/api/services', methods=['GET'])
 def get_services():
     services = [
@@ -469,139 +690,7 @@ def get_services():
     ]
     return jsonify(services)
 
-# UPDATED Vendors endpoint with proper availability data
-@app.route('/api/vendors', methods=['GET'])
-def get_vendors():
-    vendors = [
-        {
-            'id': 'paws',
-            'name': 'Paws & Claws Grooming',
-            'rating': 4.9,
-            'services': ['Grooming', 'Breed Specialist'],
-            'price': 'From $45',
-            'availableSlots': generate_availability_data()  # CHANGED from 'availability' to 'availableSlots'
-        },
-        {
-            'id': 'happy',
-            'name': 'Happy Tails Pet Hotel',
-            'rating': 4.7,
-            'services': ['Pet Hotel', 'Boarding', 'Day Care'],
-            'price': 'From $60/night',
-            'availableSlots': generate_hotel_availability()  # CHANGED from 'availability' to 'availableSlots'
-        },
-        {
-            'id': 'bark',
-            'name': 'Bark Avenue Training',
-            'rating': 4.8,
-            'services': ['Obedience Training', 'Puppy Classes', 'Behavioral'],
-            'price': 'From $75/session',
-            'availableSlots': generate_training_availability()  # CHANGED from 'availability' to 'availableSlots'
-        },
-        {
-            'id': 'whiskers',
-            'name': 'Whiskers Wellness',
-            'rating': 4.6,
-            'services': ['Veterinary', 'Wellness', 'Dental Care'],
-            'price': 'From $55',
-            'availableSlots': generate_availability_data()  # CHANGED from 'availability' to 'availableSlots'
-        },
-        {
-            'id': 'furry',
-            'name': 'Furry Friends Grooming',
-            'rating': 4.5,
-            'services': ['Grooming', 'Small Animals'],
-            'price': 'From $35',
-            'availableSlots': generate_availability_data()  # CHANGED from 'availability' to 'availableSlots'
-        }
-    ]
-    return jsonify(vendors)
-
-# New endpoint to get vendor availability for a specific date
-@app.route('/api/vendors/<vendor_id>/availability/<date>', methods=['GET'])
-def get_vendor_availability(vendor_id, date):
-    """Get specific availability for a vendor on a given date"""
-    try:
-        # Validate date format
-        try:
-            datetime.strptime(date, '%Y-%m-%d')
-        except ValueError:
-            return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
-        
-        vendors_data = {
-            'paws': generate_availability_data(),
-            'happy': generate_hotel_availability(),
-            'bark': generate_training_availability(),
-            'whiskers': generate_availability_data(),
-            'furry': generate_availability_data()
-        }
-        
-        if vendor_id not in vendors_data:
-            return jsonify({'error': 'Vendor not found'}), 404
-        
-        availability = vendors_data[vendor_id].get(date, [])
-        
-        return jsonify({
-            'vendor_id': vendor_id,
-            'date': date,
-            'availableSlots': availability
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/health', methods=['GET'])
-def health_check():
-    return jsonify({'status': 'healthy', 'message': 'PawfectFind API is running'})
-
-@app.route('/api/bookings', methods=['POST'])
-@jwt_required()
-def create_booking():
-    """Create a new booking with Service Bus integration"""
-    try:
-        user_id = get_jwt_identity()
-        data = request.get_json()
-        
-        # Validate required fields
-        required_fields = ['pet_id', 'service_type', 'vendor_id', 'booking_date', 'booking_time']
-        for field in required_fields:
-            if field not in data:
-                return jsonify({'error': f'Missing required field: {field}'}), 400
-        
-        # Create booking in database
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            INSERT INTO bookings (user_id, pet_id, service_type, vendor_id, booking_date, status)
-            VALUES (?, ?, ?, ?, ?, 'pending')
-        """, user_id, data['pet_id'], data['service_type'], data['vendor_id'], data['booking_date'])
-        
-        booking_id = cursor.fetchval("SELECT SCOPE_IDENTITY()")
-        conn.commit()
-        
-        # Prepare booking data for Service Bus
-        booking_data = {
-            'booking_id': booking_id,
-            'user_id': user_id,
-            'service_type': data['service_type'],
-            'vendor_id': data['vendor_id'],
-            'booking_date': data['booking_date'],
-            'booking_time': data['booking_time'],
-            'status': 'pending'
-        }
-        
-        # Send to Service Bus queue
-        if send_booking_to_queue(booking_data):
-            return jsonify({
-                'message': 'Booking created successfully',
-                'booking_id': booking_id,
-                'status': 'pending'
-            }), 201
-        else:
-            return jsonify({'error': 'Booking created but queue service unavailable'}), 201
-            
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+# ===== PAYMENT ROUTES =====
 
 @app.route('/api/create-payment-intent', methods=['POST'])
 @jwt_required()
@@ -627,7 +716,67 @@ def create_payment_intent():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# ===== HEALTH CHECK =====
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'healthy', 'message': 'PawfectFind API is running'})
+
+# ===== AVAILABILITY BULK CHECK =====
+
+@app.route('/api/vendors/availability/bulk', methods=['POST'])
+def get_bulk_availability():
+    """Get availability for multiple vendors and dates at once"""
+    try:
+        data = request.get_json()
+        vendor_ids = data.get('vendor_ids', [])
+        dates = data.get('dates', [])
+        
+        if not vendor_ids or not dates:
+            return jsonify({'error': 'vendor_ids and dates are required'}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Build query for multiple vendors and dates
+        placeholders = []
+        params = []
+        for vendor_id in vendor_ids:
+            for date in dates:
+                placeholders.append('(vendor_id = ? AND date = ?)')
+                params.extend([vendor_id, date])
+        
+        query = f"""
+            SELECT vendor_id, date, available_slots 
+            FROM VendorAvailability 
+            WHERE {' OR '.join(placeholders)}
+        """
+        
+        cursor.execute(query, params)
+        results = cursor.fetchall()
+        
+        availability_map = {}
+        for row in results:
+            vendor_id = row.vendor_id
+            date = row.date.strftime('%Y-%m-%d')
+            try:
+                slots = json.loads(row.available_slots) if row.available_slots else []
+            except:
+                slots = []
+            
+            if vendor_id not in availability_map:
+                availability_map[vendor_id] = {}
+            availability_map[vendor_id][date] = slots
+        
+        return jsonify(availability_map)
+        
+    except Exception as e:
+        print(f"Error in bulk availability check: {str(e)}")
+        return jsonify({'error': 'Failed to fetch bulk availability'}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
 if __name__ == '__main__':
     init_db()
     app.run(debug=os.getenv('FLASK_ENV') == 'development', host='0.0.0.0', port=5000)
-
