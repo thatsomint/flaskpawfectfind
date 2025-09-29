@@ -4,7 +4,6 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 import pyodbc
 import os
 from datetime import datetime, timedelta
-import bcrypt
 from dotenv import load_dotenv
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
 import json
@@ -248,144 +247,144 @@ def send_booking_to_queue(booking_data):
 stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
 
 # ===== AUTHENTICATION ROUTES =====
+# '''
+# @app.route('/api/auth/register', methods=['POST'])
+# def register():
+#     """Register a new user"""
+#     try:
+#         data = request.get_json()
+        
+#         # Validate required fields
+#         required_fields = ['email', 'password', 'full_name']
+#         for field in required_fields:
+#             if field not in data:
+#                 return jsonify({'error': f'Missing required field: {field}'}), 400
+        
+#         email = data['email']
+#         password = data['password']
+#         full_name = data['full_name']
+#         phone_number = data.get('phone_number')
+        
+#         # Check if user already exists
+#         conn = get_db_connection()
+#         cursor = conn.cursor()
+#         cursor.execute("SELECT id FROM users WHERE email = ?", email)
+#         if cursor.fetchone():
+#             return jsonify({'error': 'User already exists with this email'}), 400
+        
+#         # Hash password with sha256
+#         password_hash = sha256(password.encode('utf-8')).hexdigest()
+        
+#         # Create user
+#         cursor.execute("""
+#             INSERT INTO users (email, password_hash, full_name, phone_number)
+#             VALUES (?, ?, ?, ?)
+#         """, email, password_hash, full_name, phone_number)
+        
+#         user_id = cursor.fetchval("SELECT SCOPE_IDENTITY()")
+#         conn.commit()
+        
+#         # Generate JWT token
+#         access_token = create_access_token(identity=user_id)
+        
+#         return jsonify({
+#             'message': 'User registered successfully',
+#             'access_token': access_token,
+#             'user': {
+#                 'id': user_id,
+#                 'email': email,
+#                 'full_name': full_name,
+#                 'phone_number': phone_number
+#             }
+#         }), 201
+        
+#     except Exception as e:
+#         return jsonify({'error': str(e)}), 500
+#     finally:
+#         if 'conn' in locals():
+#             conn.close()
+        
+# @app.route('/api/auth/login', methods=['POST'])
+# def login():
+#     """Login user"""
+#     try:
+#         data = request.get_json()
+        
+#         # Validate required fields
+#         if 'email' not in data or 'password' not in data:
+#             return jsonify({'error': 'Email and password are required'}), 400
+        
+#         email = data['email']
+#         password = data['password']
+        
+#         # Find user
+#         conn = get_db_connection()
+#         cursor = conn.cursor()
+#         cursor.execute("""
+#             SELECT id, email, password_hash, full_name, phone_number 
+#             FROM users WHERE email = ?
+#         """, email)
+        
+#         user = cursor.fetchone()
+#         if not user:
+#             return jsonify({'error': 'Invalid email or password'}), 401
+        
+#         # Verify password
+#         if sha256(password.encode('utf-8')).hexdigest() != user.password_hash:
+#             return jsonify({'error': 'Invalid email or password'}), 401
+        
+#         # Generate JWT token
+#         access_token = create_access_token(identity=user.id)
+        
+#         return jsonify({
+#             'message': 'Login successful',
+#             'access_token': access_token,
+#             'user': {
+#                 'id': user.id,
+#                 'email': user.email,
+#                 'full_name': user.full_name,
+#                 'phone_number': user.phone_number
+#             }
+#         })
+        
+#     except Exception as e:
+#         return jsonify({'error': str(e)}), 500
+#     finally:
+#         if 'conn' in locals():
+#             conn.close()
 
-@app.route('/api/auth/register', methods=['POST'])
-def register():
-    """Register a new user"""
-    try:
-        data = request.get_json()
+# @app.route('/api/profile', methods=['GET'])
+# @jwt_required()
+# def get_profile():
+#     """Get user profile"""
+#     try:
+#         user_id = get_jwt_identity()
         
-        # Validate required fields
-        required_fields = ['email', 'password', 'full_name']
-        for field in required_fields:
-            if field not in data:
-                return jsonify({'error': f'Missing required field: {field}'}), 400
+#         conn = get_db_connection()
+#         cursor = conn.cursor()
+#         cursor.execute("""
+#             SELECT id, email, full_name, phone_number, created_at 
+#             FROM users WHERE id = ?
+#         """, user_id)
         
-        email = data['email']
-        password = data['password']
-        full_name = data['full_name']
-        phone_number = data.get('phone_number')
+#         user = cursor.fetchone()
+#         if not user:
+#             return jsonify({'error': 'User not found'}), 404
         
-        # Check if user already exists
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM users WHERE email = ?", email)
-        if cursor.fetchone():
-            return jsonify({'error': 'User already exists with this email'}), 400
+#         return jsonify({
+#             'id': user.id,
+#             'email': user.email,
+#             'full_name': user.full_name,
+#             'phone_number': user.phone_number,
+#             'created_at': user.created_at.isoformat() if user.created_at else None
+#         })
         
-        # Hash password
-        password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-        
-        # Create user
-        cursor.execute("""
-            INSERT INTO users (email, password_hash, full_name, phone_number)
-            VALUES (?, ?, ?, ?)
-        """, email, password_hash, full_name, phone_number)
-        
-        user_id = cursor.fetchval("SELECT SCOPE_IDENTITY()")
-        conn.commit()
-        
-        # Generate JWT token
-        access_token = create_access_token(identity=user_id)
-        
-        return jsonify({
-            'message': 'User registered successfully',
-            'access_token': access_token,
-            'user': {
-                'id': user_id,
-                'email': email,
-                'full_name': full_name,
-                'phone_number': phone_number
-            }
-        }), 201
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-@app.route('/api/auth/login', methods=['POST'])
-def login():
-    """Login user"""
-    try:
-        data = request.get_json()
-        
-        # Validate required fields
-        if 'email' not in data or 'password' not in data:
-            return jsonify({'error': 'Email and password are required'}), 400
-        
-        email = data['email']
-        password = data['password']
-        
-        # Find user
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, email, password_hash, full_name, phone_number 
-            FROM users WHERE email = ?
-        """, email)
-        
-        user = cursor.fetchone()
-        if not user:
-            return jsonify({'error': 'Invalid email or password'}), 401
-        
-        # Verify password
-        if not bcrypt.checkpw(password.encode('utf-8'), user.password_hash.encode('utf-8')):
-            return jsonify({'error': 'Invalid email or password'}), 401
-        
-        # Generate JWT token
-        access_token = create_access_token(identity=user.id)
-        
-        return jsonify({
-            'message': 'Login successful',
-            'access_token': access_token,
-            'user': {
-                'id': user.id,
-                'email': user.email,
-                'full_name': user.full_name,
-                'phone_number': user.phone_number
-            }
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-@app.route('/api/profile', methods=['GET'])
-@jwt_required()
-def get_profile():
-    """Get user profile"""
-    try:
-        user_id = get_jwt_identity()
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, email, full_name, phone_number, created_at 
-            FROM users WHERE id = ?
-        """, user_id)
-        
-        user = cursor.fetchone()
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
-        
-        return jsonify({
-            'id': user.id,
-            'email': user.email,
-            'full_name': user.full_name,
-            'phone_number': user.phone_number,
-            'created_at': user.created_at.isoformat() if user.created_at else None
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
+#     except Exception as e:
+#         return jsonify({'error': str(e)}), 500
+#     finally:
+#         if 'conn' in locals():
+#             conn.close()
+# '''
 # ===== PETS ROUTES =====
 
 @app.route('/api/pets', methods=['GET'])
@@ -773,6 +772,82 @@ def get_bulk_availability():
     except Exception as e:
         print(f"Error in bulk availability check: {str(e)}")
         return jsonify({'error': 'Failed to fetch bulk availability'}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+@app.route('/api/debug/database')
+def debug_database():
+    """Comprehensive database debug"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Get all vendors
+        cursor.execute("SELECT id, name FROM Vendors ORDER BY id")
+        vendors = [{'id': row.id, 'name': row.name} for row in cursor.fetchall()]
+        
+        # Get all availability vendor IDs
+        cursor.execute("SELECT DISTINCT vendor_id FROM VendorAvailability ORDER BY vendor_id")
+        availability_vendors = [row.vendor_id for row in cursor.fetchall()]
+        
+        # Test vendor 1 specifically
+        cursor.execute("SELECT id, name FROM Vendors WHERE id = 1")
+        vendor_1 = cursor.fetchone()
+        
+        cursor.execute("SELECT date, available_slots FROM VendorAvailability WHERE vendor_id = 1 AND date = '2024-01-20'")
+        vendor_1_availability = cursor.fetchone()
+        
+        return jsonify({
+            'vendors': vendors,
+            'availability_vendor_ids': availability_vendors,
+            'vendor_1_exists': bool(vendor_1),
+            'vendor_1_availability_for_2024_01_20': bool(vendor_1_availability),
+            'all_ids_match': set([v['id'] for v in vendors]) == set(availability_vendors)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+@app.route('/api/debug/test-availability/<int:vendor_id>/<date>')
+def test_availability(vendor_id, date):
+    """Test availability with detailed error info"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Check vendor exists
+        cursor.execute("SELECT id, name FROM Vendors WHERE id = ?", vendor_id)
+        vendor = cursor.fetchone()
+        
+        if not vendor:
+            return jsonify({
+                'error': f'Vendor {vendor_id} does not exist',
+                'available_vendors': [row.id for row in cursor.execute("SELECT id FROM Vendors ORDER BY id").fetchall()]
+            }), 404
+        
+        # Check availability
+        cursor.execute("SELECT date, available_slots FROM VendorAvailability WHERE vendor_id = ? AND date = ?", vendor_id, date)
+        availability = cursor.fetchone()
+        
+        return jsonify({
+            'vendor': {'id': vendor.id, 'name': vendor.name},
+            'date': date,
+            'availability_found': bool(availability),
+            'available_slots': json.loads(availability.available_slots) if availability else [],
+            'available_dates_for_vendor': [
+                row.date.strftime('%Y-%m-%d') 
+                for row in cursor.execute(
+                    "SELECT DISTINCT date FROM VendorAvailability WHERE vendor_id = ? ORDER BY date LIMIT 5", 
+                    vendor_id
+                ).fetchall()
+            ] if availability else []
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
     finally:
         if 'conn' in locals():
             conn.close()
