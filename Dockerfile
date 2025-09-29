@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     python3-dev \
     pkg-config \
+    apt-transport-https \
     && curl -sSL https://packages.microsoft.com/keys/microsoft.asc > /etc/apt/trusted.gpg.d/microsoft.asc \
     && curl -sSL https://packages.microsoft.com/config/debian/11/prod.list > /etc/apt/sources.list.d/mssql-release.list \
     && apt-get update \

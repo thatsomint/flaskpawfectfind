@@ -19,12 +19,19 @@ app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key-chan
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
 
 # Configure CORS properly (ONCE)
-CORS(app, origins=[
-    "http://localhost:3000",  # Local frontend
-    "http://localhost:5000",  # Local backend
-    "https://pawfectfind.azurewebsites.net",  # Production frontend
-    "https://pawfectfind-backend.azurewebsites.net"    # Production backend
-])
+CORS(app, resources={
+    r"/api/*": {
+        "origins": [
+            "http://localhost:3000",
+            "http://localhost:5000",
+            "https://pawfectfind.azurewebsites.net",
+            "https://pawfectfind-backend.azurewebsites.net",
+            # Add any other domains that need access
+        ],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
 
 # Initialize JWT after app configuration
 jwt = JWTManager(app)
@@ -558,9 +565,15 @@ def create_booking():
 def get_vendors():
     """Get all vendors from Azure SQL database"""
     try:
+        # Print diagnostic information
+        print("Attempting database connection...")
+        print(f"Server: {os.getenv('AZURE_SQL_SERVER')}")
+        print(f"Database: {os.getenv('AZURE_SQL_DATABASE')}")
+        
         conn = get_db_connection()
         cursor = conn.cursor()
         
+        print("Database connection successful, executing query...")
         # Query to get all vendors with additional details
         cursor.execute("SELECT id, name, rating, price, services, location, description FROM Vendors ORDER BY rating DESC")
         
