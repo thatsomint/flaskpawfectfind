@@ -25,16 +25,16 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 
 # Install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
 
 # Create non-root user (FIXED: do this AFTER copying files)
-RUN useradd -m -u 1000 flaskuser && chown -R flaskuser:flaskuser /app
-USER flaskuser
+# RUN useradd -m -u 1000 flaskuser && chown -R flaskuser:flaskuser /app
+# USER flaskuser
 
 EXPOSE 5000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "flask_app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-", "flask_app:app"]
