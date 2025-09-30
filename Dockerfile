@@ -3,8 +3,8 @@ FROM python:3.11-slim-bullseye
 WORKDIR /app
 
 # Create non-root user (FIXED: do this AFTER copying files)
-RUN useradd -m -u 1000 flaskuser && chown -R flaskuser:flaskuser /app
-USER flaskuser
+#RUN useradd -m -u 1000 flaskuser && chown -R flaskuser:flaskuser /app
+#USER flaskuser
 
 # Install system dependencies including ODBC driver AND build tools for bcrypt
 RUN apt-get update && apt-get install -y \
