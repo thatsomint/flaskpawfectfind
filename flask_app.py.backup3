@@ -1,0 +1,212 @@
+from flask import Flask, jsonify, request, send_from_directory
+from flask_cors import CORS
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+import pyodbc
+import os
+from datetime import datetime, timedelta
+from hashlib import sha256
+from dotenv import load_dotenv
+from azure.servicebus import ServiceBusClient, ServiceBusMessage
+import json
+import stripe
+
+# Load environment variables
+load_dotenv()
+
+app = Flask(__name__)
+
+# Configure JWT first
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key-change-in-production')
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
+
+# Configure CORS properly
+CORS(app, resources={
+    r"/api/*": {
+        "origins": [
+            "http://localhost:3000",
+            "http://localhost:5000",
+            "https://pawfectfind.azurewebsites.net",
+            "https://pawfectfind-backend.azurewebsites.net"
+        ],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
+
+# Initialize JWT after app configuration
+jwt = JWTManager(app)
+
+# Azure SQL Database connection
+def get_db_connection():
+    server = os.getenv('AZURE_SQL_SERVER')
+    database = os.getenv('AZURE_SQL_DATABASE')
+    username = os.getenv('AZURE_SQL_USERNAME')
+    password = os.getenv('AZURE_SQL_PASSWORD')
+    driver = '{ODBC Driver 18 for SQL Server}'
+    
+    # Print diagnostic information
+    print("Attempting database connection...")
+    print(f"Server: {server}")
+    print(f"Database: {database}")
+    
+    connection_string = f"""
+        DRIVER={driver};
+        SERVER={server};
+        DATABASE={database};
+        UID={username};
+        PWD={password};
+        Encrypt=yes;
+        TrustServerCertificate=no;
+        Connection Timeout=30;
+    """
+    
+    return pyodbc.connect(connection_string)
+
+# Initialize database tables
+def init_db():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Create Vendors table if not exists
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Vendors' AND xtype='U')
+            CREATE TABLE Vendors (
+                id NVARCHAR(50) PRIMARY KEY,
+                name NVARCHAR(100) NOT NULL,
+                rating DECIMAL(2,1) NOT NULL,
+                price NVARCHAR(50) NOT NULL,
+                services NVARCHAR(MAX) NOT NULL,
+                created_at DATETIME2 DEFAULT GETDATE()
+            )
+        """)
+        
+        # Check if vendors already exist
+        cursor.execute("SELECT COUNT(*) FROM Vendors")
+        vendor_count = cursor.fetchone()[0]
+        
+        if vendor_count == 0:
+            print("Initializing vendors data...")
+            
+            # Insert vendor data matching frontend format
+            vendors_data = [
+                ('paws', 'Paws & Claws Grooming', 4.9, 'From $45', '["Grooming", "Breed Specialist"]'),
+                ('happy', 'Happy Tails Pet Hotel', 4.7, 'From $60/night', '["Pet Hotel", "Boarding", "Day Care"]'),
+                ('paradise', 'Pet Paradise Sitters', 4.8, 'From $30/day', '["Pet Sitting", "Dog Walking", "Home Visits"]'),
+                ('elite', 'Elite Pet Training', 4.6, 'From $80/session', '["Training", "Behavior Modification", "Puppy Classes"]')
+            ]
+            
+            for vendor in vendors_data:
+                cursor.execute("""
+                    INSERT INTO Vendors (id, name, rating, price, services)
+                    VALUES (?, ?, ?, ?, ?)
+                """, vendor)
+            
+            conn.commit()
+            print("Vendors data initialized successfully")
+        else:
+            print(f"Vendors table already contains {vendor_count} vendors")
+        
+    except Exception as e:
+        print(f"Error initializing database: {str(e)}")
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+# ===== VENDORS ROUTES =====
+
+@app.route('/api/vendors', methods=['GET'])
+def get_vendors():
+    """Get all vendors from Azure SQL database"""
+    try:
+        print("Attempting to fetch vendors...")
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Query to get all vendors
+        cursor.execute("SELECT id, name, rating, price, services FROM Vendors ORDER BY rating DESC")
+        
+        vendors = []
+        for row in cursor.fetchall():
+            # Parse the services JSON string
+            try:
+                services = json.loads(row.services) if row.services else []
+            except:
+                services = []
+            
+            # Format vendor data to match frontend expectations
+            vendor = {
+                'id': row.id,  # Already a string ID
+                'name': row.name,
+                'rating': float(row.rating),
+                'price': row.price,
+                'services': services,
+                'availability': {}  # Initialize empty availability object
+            }
+            vendors.append(vendor)
+        
+        print(f"Successfully fetched {len(vendors)} vendors")
+        return jsonify(vendors)
+        
+    except Exception as e:
+        print(f"Error fetching vendors from database: {str(e)}")
+        # Fallback data matching frontend format
+        fallback_vendors = [
+            {
+                'id': 'paws',
+                'name': 'Paws & Claws Grooming',
+                'rating': 4.9,
+                'price': 'From $45',
+                'services': ['Grooming', 'Breed Specialist'],
+                'availability': {}
+            },
+            {
+                'id': 'happy',
+                'name': 'Happy Tails Pet Hotel',
+                'rating': 4.7,
+                'price': 'From $60/night',
+                'services': ['Pet Hotel', 'Boarding', 'Day Care'],
+                'availability': {}
+            }
+        ]
+        return jsonify(fallback_vendors)
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+@app.route('/api/vendors/<vendor_id>/availability/<date>', methods=['GET'])
+def get_vendor_availability(vendor_id, date):
+    """Get vendor availability"""
+    try:
+        # Validate date format
+        try:
+            datetime.strptime(date, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+        
+        # For now, return static availability data
+        availability = {
+            'morning': ['9:00 AM', '10:00 AM', '11:00 AM'],
+            'afternoon': ['2:00 PM', '3:00 PM', '4:00 PM'],
+            'evening': ['5:00 PM', '6:00 PM']
+        }
+        
+        return jsonify({
+            'vendor_id': vendor_id,
+            'date': date,
+            'availability': availability
+        })
+        
+    except Exception as e:
+        print(f"Error fetching vendor availability: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+# ===== HEALTH CHECK =====
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'healthy', 'message': 'PawfectFind API is running'})
+
+if __name__ == '__main__':
+    init_db()  # Initialize database tables and data
+    app.run(debug=os.getenv('FLASK_ENV') == 'development', host='0.0.0.0', port=5000)
