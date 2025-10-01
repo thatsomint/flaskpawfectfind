@@ -9,22 +9,33 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+# Configure CORS properly
+CORS(app, resources={
+    r"/api/*": {
+        "origins": ["*"],  # Allow all for demo
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "Accept"]
+    }
+})
 
 # Azure SQL Database connection
+# ===== HARDCODED WITH FALLBACK =====
+# Use hardcoded values if environment variables aren't set
+AZURE_SQL_SERVER = "pawfectfinddb.database.windows.net"
+AZURE_SQL_DATABASE = "pawfectfinddb"
+AZURE_SQL_USERNAME = "pawfectadmin"
+AZURE_SQL_PASSWORD = "Password!123"
+# ===================================
+
 def get_db_connection():
-    server = os.getenv('AZURE_SQL_SERVER')
-    database = os.getenv('AZURE_SQL_DATABASE')
-    username = os.getenv('AZURE_SQL_USERNAME')
-    password = os.getenv('AZURE_SQL_PASSWORD')
     driver = '{ODBC Driver 18 for SQL Server}'
     
     connection_string = f"""
         DRIVER={driver};
-        SERVER={server};
-        DATABASE={database};
-        UID={username};
-        PWD={password};
+        SERVER={AZURE_SQL_SERVER};
+        DATABASE={AZURE_SQL_DATABASE};
+        UID={AZURE_SQL_USERNAME};
+        PWD={AZURE_SQL_PASSWORD};
         Encrypt=yes;
         TrustServerCertificate=no;
         Connection Timeout=30;
@@ -137,6 +148,41 @@ def get_vendor_availability(vendor_id, date):
     finally:
         if 'conn' in locals():
             conn.close()
+
+def get_demo_bookings():
+    """Get all demo bookings from localStorage (for debugging)"""
+    # This would normally come from your database
+    return jsonify({
+        'message': 'Service Bus simulation - these bookings would be processed',
+        'bookings': []  # You could store these in a temporary table
+    })
+
+@app.route('/api/debug/service-bus-test', methods=['POST'])
+def test_service_bus():
+    """Test endpoint to simulate Service Bus message processing"""
+    try:
+        booking_data = request.json
+        
+        # Log the simulated Service Bus processing
+        print("🔔 SERVICE BUS SIMULATION - Processing booking:")
+        print(f"   Booking ID: {booking_data.get('bookingId')}")
+        print(f"   Service: {booking_data.get('booking', {}).get('service')}")
+        print(f"   Vendor: {booking_data.get('booking', {}).get('vendor')}")
+        print(f"   Customer: {booking_data.get('customer', {}).get('name')}")
+        
+        # Simulate processing delay
+        time.sleep(1)
+        
+        return jsonify({
+            'status': 'processed',
+            'message': 'Booking would be processed by Service Bus consumer',
+            'booking_id': booking_data.get('bookingId'),
+            'processed_at': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        print(f"Service Bus test error: {e}")
+        return jsonify({'error': str(e)}), 400
 
 # ===== HEALTH CHECK =====
 
