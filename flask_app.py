@@ -185,10 +185,23 @@ def test_service_bus():
         return jsonify({'error': str(e)}), 400
 
 # ===== HEALTH CHECK =====
-
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    return jsonify({'status': 'healthy', 'message': 'PawfectFind API is running'})
+    try:
+        # Test database connection
+        conn = get_db_connection()
+        conn.close()
+        return jsonify({
+            'status': 'healthy', 
+            'message': 'PawfectFind API is running',
+            'database': 'connected'
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'unhealthy',
+            'message': 'Database connection failed',
+            'error': str(e)
+        }), 500
 
 if __name__ == '__main__':
     init_db()
