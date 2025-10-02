@@ -212,4 +212,5 @@ def health_check():
 if __name__ == '__main__':
     # Comment out init_db() temporarily to test
     #init_db()
+    print("Starting Flask app on port 8000...") #test
     app.run(debug=True, host='0.0.0.0', port=8000)
