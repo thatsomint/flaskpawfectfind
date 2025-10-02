@@ -184,6 +184,12 @@ def test_service_bus():
         print(f"Service Bus test error: {e}")
         return jsonify({'error': str(e)}), 400
 
+# ===== ADD ROOT ENDPOINT =====
+@app.route('/')
+def root():
+    return jsonify({'status': 'healthy', 'message': 'PawfectFind API'})
+    
+
 # ===== HEALTH CHECK =====
 @app.route('/api/health', methods=['GET'])
 def health_check():
