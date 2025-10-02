@@ -188,7 +188,7 @@ def test_service_bus():
 @app.route('/')
 def root():
     return jsonify({'status': 'healthy', 'message': 'PawfectFind API'})
-    
+
 
 # ===== HEALTH CHECK =====
 @app.route('/api/health', methods=['GET'])
@@ -210,5 +210,6 @@ def health_check():
         }), 500
 
 if __name__ == '__main__':
-    init_db()
+    # Comment out init_db() temporarily to test
+    #init_db()
     app.run(debug=True, host='0.0.0.0', port=8000)
