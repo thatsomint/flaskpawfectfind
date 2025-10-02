@@ -1,5 +1,8 @@
 FROM python:3.11-slim-bullseye
 
+# Add cache busting
+ARG CACHE_BUST=1
+
 WORKDIR /app
 
 # Create non-root user (FIXED: do this AFTER copying files)

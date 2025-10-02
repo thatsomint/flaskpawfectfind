@@ -3,12 +3,12 @@ services:
   web:
     build: .
     ports:
-      - "5000:5000"
+      - "8000:8000"
     env_file:
       - .env  # Load environment variables from .env file
     restart: unless-stopped
     healthcheck: # Health check configuration
-      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
