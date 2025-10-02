@@ -1,7 +1,7 @@
 FROM python:3.11-slim-bullseye
 
 # Add cache busting
-ARG CACHE_BUST=1
+#ARG CACHE_BUST=1
 
 WORKDIR /app
 

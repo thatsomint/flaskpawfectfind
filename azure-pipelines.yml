@@ -35,6 +35,7 @@ stages:
         dockerfile: $(dockerfilePath)
         containerRegistry: $(dockerRegistryServiceConnection)
         tags: $(tag)
+        #arguments: '--no-cache --build-arg CACHE_BUST=$(Build.BuildId)'
 
 - stage: Deploy
   displayName: Deploy backend
